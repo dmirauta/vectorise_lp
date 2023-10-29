@@ -113,12 +113,10 @@ where
 impl LinearProgram<f64> {
     pub fn solve(&self) -> Result<(Array1<f64>, f64), minilp::Error> {
         let mut problem = Problem::new(OptimizationDirection::Minimize);
-        // equivalent representation but has private fields
-        let mut minilp_vars = vec![];
-        for i in 0..self.total_scalars {
-            let c = self.cost.get_coef(i);
-            minilp_vars.push(problem.add_var(c, (0.0, f64::INFINITY)));
-        }
+        // equivalent (usize) representation but has private fields
+        let minilp_vars: Vec<_> = (0..self.total_scalars)
+            .map(|i| problem.add_var(self.cost.get_coef(i), (0.0, f64::INFINITY)))
+            .collect();
         for EqConstraint { expr, c } in self.constraints.iter() {
             let minilp_cons: Vec<_> = (0..self.total_scalars)
                 .map(|i| (minilp_vars[i], expr.get_coef(i)))
