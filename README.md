@@ -10,20 +10,21 @@ Generate the 1-D representation for LPs with n-D variables (such as the Optimal 
 - An elementwise product can be performed between a coefficient ndarray and a variable with `([1.5, 3.2], [s_0, s_1]).into()` producing `[1.5s_0, 3.2s_1]`.
 - Expression can be added and Array Expression can be summed along axes.
 - Slacks variables will be added to inequality constraints to convert them to equalities.
+- problem is converted to [minilp](https://crates.io/crates/minilp) and solution is reshaped into original format
 
 Example:
 
 ```rust
-let mut ls = LinearSystem::<f32>::new();
+let mut ls = LinearProgram::<f32>::new();
 ls.add_var("v1", &[2, 2]);
 let v1 = &ls["v1"];
 
 let a = array![[1.0, 2.0], [3.0, 4.0]].into_dyn();
 
 // v1 + a.*v1 matrix expression
-let exprs2 = v1.into_arr_expr() + (a, v1).into();
+let exprs = v1.into_arr_expr() + (a, v1).into();
 
-ls.add_leq_constraints(exprs2.sum_axis(0), array![7.0, 8.0].into_dyn());
+ls.add_leq_constraints(exprs.sum_axis(0), array![7.0, 8.0].into_dyn());
 dbg!(&ls.constraints);
 ```
 
@@ -36,8 +37,4 @@ Producing:
 ]
 ```
 
-TODO:
-
-- construct canonical LP (c, A, b)
-- dispatch to solver (ndarray-linalg)
-- collect flat result back into shaped variables
+See also `toy_problem` in `lib.rs`.
