@@ -4,7 +4,7 @@ use num_traits::{Float, One, Zero};
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::{Debug, Display},
-    ops::{Add, AddAssign, Index},
+    ops::{Add, AddAssign, Index, MulAssign},
 };
 
 /// holds array of scalar variable ids
@@ -21,7 +21,7 @@ impl ShapedVariable {
         self.clone().into()
     }
 
-    pub fn shaped_sol<T: Clone + Zero>(&self, sol: Array1<T>) -> ArrayD<T> {
+    pub fn shaped_sol<T: Clone + Zero>(&self, sol: &Array1<T>) -> ArrayD<T> {
         let mut vals = ArrayD::<T>::zeros(self.inner.shape());
         for (idx, i) in self.inner.indexed_iter() {
             vals[idx] = sol[*i].clone();
@@ -87,7 +87,7 @@ where
     {
         let exprs: ArrayExpr<T> = exprs.into();
         let cs: ArrayD<T> = cs.into();
-        assert!(exprs.inner.shape() == cs.shape());
+        assert!(exprs.inner.shape() == cs.shape() || (exprs.inner.len() == 1 && cs.len() == 1));
 
         for (expr, c) in exprs.inner.into_iter().zip(cs.into_iter()) {
             self.constraints.push(EqConstraint { expr, c })
@@ -101,12 +101,30 @@ where
     {
         let exprs: ArrayExpr<T> = exprs.into();
         let cs: ArrayD<T> = cs.into();
-        assert!(exprs.inner.shape() == cs.shape());
+        assert!(exprs.inner.shape() == cs.shape() || (exprs.inner.len() == 1 && cs.len() == 1));
 
         let name = format!("constraint_{}_slacks", self.constraints.len());
         self.add_var(&name, exprs.inner.shape());
         let slacks = self.index(name);
         self.add_eq_constraints(exprs + slacks.into_arr_expr(), cs);
+    }
+
+    pub fn add_eq_0_constraints<IALE>(&mut self, exprs: IALE)
+    where
+        IALE: Into<ArrayExpr<T>>,
+    {
+        let exprs: ArrayExpr<T> = exprs.into();
+        let cs = ArrayD::<T>::zeros(exprs.inner.shape());
+        self.add_eq_constraints(exprs, cs);
+    }
+
+    pub fn add_leq_0_constraints<IALE>(&mut self, exprs: IALE)
+    where
+        IALE: Into<ArrayExpr<T>>,
+    {
+        let exprs: ArrayExpr<T> = exprs.into();
+        let cs = ArrayD::<T>::zeros(exprs.inner.shape());
+        self.add_leq_constraints(exprs, cs);
     }
 }
 
@@ -146,12 +164,33 @@ pub struct LinearExpression<T: Default> {
     coefficients: BTreeMap<usize, T>,
 }
 
-impl<T: Default + Zero + Clone> LinearExpression<T> {
+impl<T> LinearExpression<T>
+where
+    T: Default + Display + Zero + Clone + Copy + MulAssign,
+{
     pub fn get_coef(&self, idx: usize) -> T {
         match self.coefficients.get(&idx) {
             Some(c) => c.clone(),
             None => T::zero(),
         }
+    }
+
+    pub fn scale(&mut self, s: T) {
+        for v in self.coefficients.values_mut() {
+            *v *= s;
+        }
+    }
+
+    pub fn scaled(&self, s: T) -> Self {
+        let mut c = self.clone();
+        c.scale(s);
+        c
+    }
+
+    pub fn repeat(&self, shape: &[usize]) -> ArrayExpr<T> {
+        let mut inner = ArrayD::default(IxDyn(shape));
+        inner.fill(self.clone());
+        ArrayExpr { inner }
     }
 }
 
@@ -197,16 +236,25 @@ impl<T: Clone + AddAssign + Default> Add for LinearExpression<T> {
 
 impl<T: Clone + AddAssign + Default> AddAssign for LinearExpression<T> {
     fn add_assign(&mut self, rhs: Self) {
-        *self = self.clone() + rhs.clone();
+        *self = self.clone() + rhs;
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ArrayExpr<T: Default + Display> {
     pub inner: ArrayD<LinearExpression<T>>,
 }
 
-impl<T: Display + Default + Clone + AddAssign> ArrayExpr<T> {
+impl<T> ArrayExpr<T>
+where
+    T: Display + Default + Clone + Copy + MulAssign + Add + AddAssign + Zero,
+{
+    pub fn new(size: &[usize]) -> Self {
+        ArrayExpr {
+            inner: ArrayD::default(IxDyn(size)),
+        }
+    }
+
     pub fn sum_axis(&self, axis: usize) -> Self {
         let inner = self.inner.sum_axis(Axis(axis));
         Self { inner }
@@ -218,6 +266,18 @@ impl<T: Display + Default + Clone + AddAssign> ArrayExpr<T> {
             res = res.sum_axis(0);
         }
         res.inner.first().unwrap().clone()
+    }
+
+    pub fn scale(&mut self, s: T) {
+        for v in self.inner.iter_mut() {
+            v.scale(s);
+        }
+    }
+
+    pub fn scaled(&self, s: T) -> Self {
+        let mut c = self.clone();
+        c.scale(s);
+        c
     }
 }
 
@@ -238,17 +298,40 @@ where
     }
 }
 
+impl<T> From<(ArrayD<T>, &ArrayExpr<T>)> for ArrayExpr<T>
+where
+    T: Clone + Copy + AddAssign + Default + Display + Zero + MulAssign,
+{
+    fn from((coefs, exprs): (ArrayD<T>, &ArrayExpr<T>)) -> Self {
+        assert!(coefs.shape() == exprs.inner.shape());
+        let mut inner = ArrayD::default(IxDyn(&exprs.inner.shape()));
+        for (c, (idx, expr)) in coefs.iter().zip(exprs.inner.indexed_iter()) {
+            inner[idx] = expr.scaled(*c);
+        }
+        ArrayExpr { inner }
+    }
+}
+
 impl<T> Add for ArrayExpr<T>
 where
     T: Clone + AddAssign + Default + Display,
 {
-    type Output = ArrayExpr<T>;
+    type Output = Self;
 
     fn add(mut self, rhs: Self) -> Self::Output {
         for (le, re) in self.inner.iter_mut().zip(rhs.inner.iter()) {
             *le += re.clone();
         }
         self
+    }
+}
+
+impl<T> AddAssign for ArrayExpr<T>
+where
+    T: Clone + AddAssign + Default + Display,
+{
+    fn add_assign(&mut self, rhs: Self) {
+        *self = self.clone() + rhs;
     }
 }
 
@@ -285,5 +368,5 @@ fn toy_prob() {
     let (sol, obj) = ls.solve().unwrap();
     dbg!(&sol, &obj);
 
-    dbg!(x.shaped_sol(sol));
+    dbg!(x.shaped_sol(&sol));
 }
