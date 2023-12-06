@@ -1,11 +1,13 @@
-use minilp::{ComparisonOp, OptimizationDirection, Problem};
-use ndarray::{Array1, ArrayD, Axis, IxDyn};
+use lp_wrap::{LPOutput, SolvesLP, StandardFormLP};
+use ndarray::{Array1, Array2, ArrayD, Axis, IxDyn};
 use num_traits::{Float, One, Zero};
 use std::{
     collections::{BTreeMap, HashMap},
     fmt::{Debug, Display},
     ops::{Add, AddAssign, Index, MulAssign},
 };
+
+mod lp_wrap;
 
 /// holds array of scalar variable ids
 #[derive(Clone, Debug)]
@@ -49,7 +51,7 @@ pub struct LinearProgram<T: Clone + Default> {
 
 impl<T> LinearProgram<T>
 where
-    T: Clone + AddAssign + From<f32> + Default + Display + Float,
+    T: Clone + AddAssign + MulAssign + From<f32> + Default + Display + Float,
 {
     pub fn new() -> Self {
         Self {
@@ -87,7 +89,9 @@ where
     {
         let exprs: ArrayExpr<T> = exprs.into();
         let cs: ArrayD<T> = cs.into();
-        assert!(exprs.inner.shape() == cs.shape() || (exprs.inner.len() == 1 && cs.len() == 1));
+        if !(exprs.inner.len() == 1 && cs.len() == 1) {
+            assert!(exprs.inner.shape() == cs.shape());
+        }
 
         for (expr, c) in exprs.inner.into_iter().zip(cs.into_iter()) {
             self.constraints.push(EqConstraint { expr, c })
@@ -101,7 +105,9 @@ where
     {
         let exprs: ArrayExpr<T> = exprs.into();
         let cs: ArrayD<T> = cs.into();
-        assert!(exprs.inner.shape() == cs.shape() || (exprs.inner.len() == 1 && cs.len() == 1));
+        if !(exprs.inner.len() == 1 && cs.len() == 1) {
+            assert!(exprs.inner.shape() == cs.shape());
+        }
 
         let name = format!("constraint_{}_slacks", self.constraints.len());
         self.add_var(&name, exprs.inner.shape());
@@ -126,24 +132,25 @@ where
         let cs = ArrayD::<T>::zeros(exprs.inner.shape());
         self.add_leq_constraints(exprs, cs);
     }
-}
 
-impl LinearProgram<f64> {
-    pub fn solve(&self) -> Result<(Array1<f64>, f64), minilp::Error> {
-        let mut problem = Problem::new(OptimizationDirection::Minimize);
-        // equivalent (usize) representation but has private fields
-        let minilp_vars: Vec<_> = (0..self.total_scalars)
-            .map(|i| problem.add_var(self.cost.get_coef(i), (0.0, f64::INFINITY)))
+    pub fn to_standard_form(&self) -> StandardFormLP<T> {
+        let c = (0..self.total_scalars)
+            .map(|i| self.cost.get_coef(i))
             .collect();
-        for EqConstraint { expr, c } in self.constraints.iter() {
-            let minilp_cons: Vec<_> = (0..self.total_scalars)
-                .map(|i| (minilp_vars[i], expr.get_coef(i)))
-                .collect();
-            problem.add_constraint(minilp_cons.as_slice(), ComparisonOp::Eq, *c);
+        let n_constraints = self.constraints.len();
+        let mut a = Array2::<T>::zeros([n_constraints, self.total_scalars]);
+        let mut b = Array1::<T>::zeros(n_constraints);
+        for (j, EqConstraint { expr, c }) in self.constraints.iter().enumerate() {
+            for i in 0..self.total_scalars {
+                a[(j, i)] = expr.get_coef(i);
+            }
+            b[j] = *c;
         }
-        problem
-            .solve()
-            .map(|s| (minilp_vars.iter().map(|v| s[*v]).collect(), s.objective()))
+        StandardFormLP { c, a, b }
+    }
+
+    pub fn solve<Solver: SolvesLP<T>>(&self) -> Result<LPOutput<T>, String> {
+        Solver::solve(self.to_standard_form())
     }
 }
 
@@ -365,8 +372,8 @@ fn toy_prob() {
     ls.add_leq_constraints(x_expr.sum_axis(1), hs);
     dbg!(&ls.constraints);
 
-    let (sol, obj) = ls.solve().unwrap();
-    dbg!(&sol, &obj);
+    let LPOutput { sol, solver_stats } = ls.solve::<lp_wrap::MiniLPSolver>().unwrap();
+    dbg!(&sol, &solver_stats);
 
     dbg!(x.shaped_sol(&sol));
 }
