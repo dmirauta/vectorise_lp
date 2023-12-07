@@ -43,6 +43,5 @@ See also `toy_problem` in `lib.rs`.
 # TODO
 
 - other backends (behind feature flags?)
-- evaluate expressions for solution
 - prune variables and constraints
 - add geq constraints method for convenience

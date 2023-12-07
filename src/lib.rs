@@ -173,7 +173,7 @@ pub struct LinearExpression<T: Default> {
 
 impl<T> LinearExpression<T>
 where
-    T: Default + Display + Zero + Clone + Copy + MulAssign,
+    T: Default + Display + Zero + Clone + Copy + AddAssign + MulAssign,
 {
     pub fn get_coef(&self, idx: usize) -> T {
         match self.coefficients.get(&idx) {
@@ -198,6 +198,16 @@ where
         let mut inner = ArrayD::default(IxDyn(shape));
         inner.fill(self.clone());
         ArrayExpr { inner }
+    }
+
+    pub fn eval(&self, x: &Array1<T>) -> T {
+        let mut val = T::zero();
+        for (id, coeff) in self.coefficients.iter() {
+            let mut t = x[*id];
+            t *= *coeff;
+            val += t;
+        }
+        val
     }
 }
 
@@ -286,6 +296,14 @@ where
         c.scale(s);
         c
     }
+
+    pub fn eval(&self, x: &Array1<T>) -> ArrayD<T> {
+        let mut val = ArrayD::<T>::zeros(self.inner.shape());
+        for (idx, expr) in self.inner.indexed_iter() {
+            val[idx] = expr.eval(x);
+        }
+        val
+    }
 }
 
 // To get around multiplication of different types
@@ -366,7 +384,8 @@ fn toy_prob() {
     let hs = ndarray::array![0.53526838, 0.82200931].into_dyn();
 
     let cs_mul_x: ArrayExpr<f64> = (cs, &x).into();
-    ls.set_cost(cs_mul_x.sum());
+    let cost = cs_mul_x.sum();
+    ls.set_cost(cost.clone());
     dbg!(&ls.cost);
     ls.add_eq_constraints(x_expr.sum_axis(0), bs);
     ls.add_leq_constraints(x_expr.sum_axis(1), hs);
@@ -374,6 +393,6 @@ fn toy_prob() {
 
     let LPOutput { sol, solver_stats } = ls.solve::<lp_wrap::MiniLPSolver>().unwrap();
     dbg!(&sol, &solver_stats);
-
+    dbg!(cost.eval(&sol));
     dbg!(x.shaped_sol(&sol));
 }

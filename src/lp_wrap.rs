@@ -14,7 +14,7 @@ pub struct StandardFormLP<T> {
 
 pub struct LPOutput<T> {
     pub sol: Array1<T>,
-    pub solver_stats: HashMap<String, T>,
+    pub solver_stats: HashMap<&'static str, T>,
 }
 
 pub trait SolvesLP<T> {
@@ -24,6 +24,7 @@ pub trait SolvesLP<T> {
 
 pub struct MiniLPSolver;
 
+// TODO: Cast to/from for f32 & this backend?
 impl SolvesLP<f64> for MiniLPSolver {
     fn solve(StandardFormLP { c, a, b }: StandardFormLP<f64>) -> Result<LPOutput<f64>, String> {
         let n_vars = c.len();
@@ -41,7 +42,8 @@ impl SolvesLP<f64> for MiniLPSolver {
             Ok(s) => {
                 let sol = minilp_vars.iter().map(|v| s[*v]).collect();
                 // TODO: pass some stats through...
-                let solver_stats = HashMap::new();
+                let mut solver_stats = HashMap::new();
+                solver_stats.insert("cost", s.objective());
                 Ok(LPOutput { sol, solver_stats })
             }
             Err(e) => Err(e.to_string()),
