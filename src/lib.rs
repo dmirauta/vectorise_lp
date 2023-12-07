@@ -7,7 +7,7 @@ use std::{
     ops::{Add, AddAssign, Index, MulAssign},
 };
 
-mod lp_wrap;
+pub mod lp_wrap;
 
 /// holds array of scalar variable ids
 #[derive(Clone, Debug)]
